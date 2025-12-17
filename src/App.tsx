@@ -416,6 +416,18 @@ export default function App() {
     });
   }, []);
 
+  const handlePrimaryAction = useCallback(() => {
+    if (!hasStarted) {
+      playBackgroundMusic();
+      setHasStarted(true);
+      return;
+    }
+    if (hasAnimationCompleted && isCandleLit) {
+      setIsCandleLit(false);
+      setFireworksActive(true);
+    }
+  }, [hasStarted, hasAnimationCompleted, isCandleLit, playBackgroundMusic]);
+
   const typingComplete = currentLineIndex >= TYPED_LINES.length;
   const typedLines = useMemo(() => {
     if (TYPED_LINES.length === 0) {
@@ -511,30 +523,35 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "Space" && event.key !== " ") {
-        return;
-      }
+      // Any key can trigger the primary action
       event.preventDefault();
-      if (!hasStarted) {
-        playBackgroundMusic();
-        setHasStarted(true);
-        return;
-      }
-      if (hasAnimationCompleted && isCandleLit) {
-        setIsCandleLit(false);
-        setFireworksActive(true);
-      }
+      handlePrimaryAction();
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [hasStarted, hasAnimationCompleted, isCandleLit, playBackgroundMusic]);
+  }, [handlePrimaryAction]);
+
+  useEffect(() => {
+    const handlePointerDown = () => {
+      handlePrimaryAction();
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [handlePrimaryAction]);
 
   const handleCardToggle = useCallback((id: string) => {
     setActiveCardId((current) => (current === id ? null : id));
   }, []);
 
   const isScenePlaying = hasStarted && sceneStarted;
+  const showActionButton =
+    !hasStarted || (hasAnimationCompleted && isCandleLit);
+  const actionButtonLabel = !hasStarted
+    ? "Start"
+    : hasAnimationCompleted && isCandleLit
+    ? "Blow out candle"
+    : "Tap / press";
 
   return (
     <div className="App">
@@ -562,7 +579,18 @@ export default function App() {
         </div>
       </div>
       {hasAnimationCompleted && isCandleLit && (
-        <div className="hint-overlay">press space to blow out the candle</div>
+        <div className="hint-overlay">tap/click/press to blow out the candle</div>
+      )}
+      {showActionButton && (
+        <div className="action-button-container">
+          <button
+            type="button"
+            className="action-button"
+            onClick={handlePrimaryAction}
+          >
+            {actionButtonLabel}
+          </button>
+        </div>
       )}
       <Canvas
         gl={{ alpha: true }}
