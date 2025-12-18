@@ -392,7 +392,10 @@ export default function App() {
   const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const typedTextRef = useRef<HTMLDivElement | null>(null);
   const audioInitializedRef = useRef(false);
+  const audioPlayAttemptedRef = useRef(false);
+  const audioUnlockedRef = useRef(false);
 
+  // Create audio element function - called on mount
   useEffect(() => {
     // Initialize audio element with mobile-friendly attributes
     const audio = new Audio("/nouolve_bianche.mp3");
@@ -426,37 +429,102 @@ export default function App() {
       audio.src = ""; // Clear source to free memory
       backgroundAudioRef.current = null;
       audioInitializedRef.current = false;
+      audioPlayAttemptedRef.current = false;
     };
   }, []);
 
-  const tryPlayAudio = useCallback((audio: HTMLAudioElement) => {
+  // Unlock audio context on first user interaction (mobile browsers requirement)
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current) {
+      return; // Already unlocked
+    }
+
+    const audio = backgroundAudioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    // Try to unlock by playing a very short silent sound
+    const wasMuted = audio.muted;
+    const wasVolume = audio.volume;
+    audio.muted = true;
+    audio.volume = 0;
+    
+    audio.play()
+      .then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.muted = wasMuted;
+        audio.volume = wasVolume;
+        audioUnlockedRef.current = true;
+        console.log("Audio context unlocked");
+      })
+      .catch(() => {
+        // Silent fail - unlock will be attempted on actual play
+        audio.muted = wasMuted;
+        audio.volume = wasVolume;
+      });
+  }, []);
+
+  // Direct audio play function - must be called synchronously from user interaction
+  // This is critical for mobile browsers, especially iOS
+  const playAudioDirectly = useCallback(() => {
+    // First, try to unlock audio context if not already unlocked
+    if (!audioUnlockedRef.current) {
+      unlockAudio();
+    }
+
+    if (audioPlayAttemptedRef.current) {
+      return; // Already attempted
+    }
+
+    let audio = backgroundAudioRef.current;
+    
+    // If audio doesn't exist or isn't ready, create a new one for mobile
+    // Some mobile browsers need a fresh audio instance per user interaction
+    if (!audio || audio.readyState === 0) {
+      console.log("Creating new audio instance for mobile");
+      audio = new Audio("/nouolve_bianche.mp3");
+      audio.loop = true;
+      audio.volume = MUSIC_VOLUME;
+      audio.setAttribute("playsinline", "true");
+      audio.setAttribute("webkit-playsinline", "true");
+      audio.crossOrigin = "anonymous";
+      backgroundAudioRef.current = audio;
+    }
+
+    if (!audio) {
+      console.warn("Failed to create audio");
+      return;
+    }
+
+    audioPlayAttemptedRef.current = true;
     audio.volume = MUSIC_VOLUME;
     audio.currentTime = 0;
     
-    // Play audio - critical for mobile: must be called directly from user interaction
+    // Try to play immediately - this must happen synchronously in the event handler
     const playPromise = audio.play();
     
     if (playPromise !== undefined) {
       playPromise
         .then(() => {
           console.log("Audio playing successfully");
-          // Ensure volume is set after play starts (some mobile browsers reset it)
           audio.volume = MUSIC_VOLUME;
+          audioUnlockedRef.current = true;
         })
         .catch((error) => {
           console.error("Audio play error:", error);
           console.error("Audio readyState:", audio.readyState);
-          console.error("This might be due to browser autoplay policies. User interaction is required.");
           
-          // Try to unlock audio context on mobile by playing muted first
+          // For mobile: try unlocking with muted play first
           if (audio.paused) {
-            const originalVolume = audio.volume;
+            const wasMuted = audio.muted;
             audio.muted = true;
             audio.volume = 0;
             
             audio.play()
               .then(() => {
-                // Successfully unlocked, now play with sound
+                // Unlocked! Now play with sound
                 audio.muted = false;
                 audio.volume = MUSIC_VOLUME;
                 audio.currentTime = 0;
@@ -464,45 +532,28 @@ export default function App() {
               })
               .then(() => {
                 console.log("Audio unlocked and playing");
+                audioUnlockedRef.current = true;
               })
               .catch((err) => {
                 console.error("Unlock attempt failed:", err);
-                audio.muted = false;
-                audio.volume = originalVolume;
+                audio.muted = wasMuted;
+                audio.volume = MUSIC_VOLUME;
+                // Reset the flag so user can try again
+                audioPlayAttemptedRef.current = false;
               });
+          } else {
+            audioPlayAttemptedRef.current = false;
           }
         });
     }
-  }, []);
+  }, [unlockAudio]);
 
-  const playBackgroundMusic = useCallback(() => {
-    const audio = backgroundAudioRef.current;
-    if (!audio) {
-      console.warn("Audio not initialized");
-      return;
-    }
-    if (!audio.paused) {
-      return;
-    }
-    
-    // For mobile: ensure audio is loaded and ready
-    // readyState: 0=HAVE_NOTHING, 1=HAVE_METADATA, 2=HAVE_CURRENT_DATA, 3=HAVE_FUTURE_DATA, 4=HAVE_ENOUGH_DATA
-    if (audio.readyState < 2) {
-      // Try to load the audio
-      audio.load();
-      // Wait a bit for mobile browsers to load
-      setTimeout(() => {
-        tryPlayAudio(audio);
-      }, 100);
-      return;
-    }
-    
-    tryPlayAudio(audio);
-  }, [tryPlayAudio]);
 
   const handlePrimaryAction = useCallback(() => {
     if (!hasStarted) {
-      playBackgroundMusic();
+      // CRITICAL FOR MOBILE: Play audio immediately, before any state updates
+      // This must happen synchronously in the event handler
+      playAudioDirectly();
       setHasStarted(true);
       return;
     }
@@ -510,7 +561,7 @@ export default function App() {
       setIsCandleLit(false);
       setFireworksActive(true);
     }
-  }, [hasStarted, hasAnimationCompleted, isCandleLit, playBackgroundMusic]);
+  }, [hasStarted, hasAnimationCompleted, isCandleLit, playAudioDirectly]);
 
   const typingComplete = currentLineIndex >= TYPED_LINES.length;
   const typedLines = useMemo(() => {
@@ -557,6 +608,9 @@ export default function App() {
       setIsCandleLit(true);
       setFireworksActive(false);
       setHasAnimationCompleted(false);
+      // Reset audio attempt flag so user can retry
+      audioPlayAttemptedRef.current = false;
+      audioUnlockedRef.current = false;
       return;
     }
 
@@ -598,6 +652,29 @@ export default function App() {
     sceneStarted,
   ]);
 
+  // Unlock audio on first user interaction (mobile requirement)
+  useEffect(() => {
+    const unlockOnInteraction = () => {
+      if (!audioUnlockedRef.current) {
+        unlockAudio();
+      }
+      // Remove listeners after first unlock
+      window.removeEventListener("touchstart", unlockOnInteraction);
+      window.removeEventListener("click", unlockOnInteraction);
+      window.removeEventListener("pointerdown", unlockOnInteraction);
+    };
+
+    window.addEventListener("touchstart", unlockOnInteraction, { passive: true, once: true });
+    window.addEventListener("click", unlockOnInteraction, { once: true });
+    window.addEventListener("pointerdown", unlockOnInteraction, { once: true });
+
+    return () => {
+      window.removeEventListener("touchstart", unlockOnInteraction);
+      window.removeEventListener("click", unlockOnInteraction);
+      window.removeEventListener("pointerdown", unlockOnInteraction);
+    };
+  }, [unlockAudio]);
+
   useEffect(() => {
     const handle = window.setInterval(() => {
       setCursorVisible((prev) => !prev);
@@ -618,23 +695,29 @@ export default function App() {
 
   useEffect(() => {
     const handlePointerDown = () => {
+      // For mobile: play audio immediately on pointer down
+      if (!hasStarted) {
+        playAudioDirectly();
+      }
       handlePrimaryAction();
     };
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [handlePrimaryAction]);
+  }, [handlePrimaryAction, hasStarted, playAudioDirectly]);
 
   // Add touchstart handler specifically for mobile devices
   useEffect(() => {
     const handleTouchStart = () => {
       // Only handle if it's the first touch (not already started)
       if (!hasStarted) {
+        // Play audio immediately on touch
+        playAudioDirectly();
         handlePrimaryAction();
       }
     };
     window.addEventListener("touchstart", handleTouchStart, { passive: true });
     return () => window.removeEventListener("touchstart", handleTouchStart);
-  }, [handlePrimaryAction, hasStarted]);
+  }, [handlePrimaryAction, hasStarted, playAudioDirectly]);
 
   const handleCardToggle = useCallback((id: string) => {
     setActiveCardId((current) => (current === id ? null : id));
@@ -682,7 +765,20 @@ export default function App() {
           <button
             type="button"
             className="action-button"
-            onClick={handlePrimaryAction}
+            onClick={() => {
+              // CRITICAL FOR MOBILE: Play audio immediately in the event handler
+              // before any React state updates or callbacks
+              if (!hasStarted) {
+                playAudioDirectly();
+              }
+              handlePrimaryAction();
+            }}
+            onTouchStart={() => {
+              // For mobile touch: play audio immediately
+              if (!hasStarted) {
+                playAudioDirectly();
+              }
+            }}
           >
             {actionButtonLabel}
           </button>
