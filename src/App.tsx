@@ -391,22 +391,88 @@ export default function App() {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const typedTextRef = useRef<HTMLDivElement | null>(null);
+  const audioInitializedRef = useRef(false);
 
   useEffect(() => {
+    // Initialize audio element with mobile-friendly attributes
     const audio = new Audio("/nouolve_bianche.mp3");
     audio.loop = true;
     audio.preload = "auto";
-    audio.volume = MUSIC_VOLUME; // Set volume level
+    audio.volume = MUSIC_VOLUME;
+    // Critical for iOS: allows audio to play inline without fullscreen
+    audio.setAttribute("playsinline", "true");
+    audio.setAttribute("webkit-playsinline", "true");
+    audio.setAttribute("x-webkit-airplay", "allow");
+    // Cross-origin and other mobile-friendly attributes
+    audio.crossOrigin = "anonymous";
     // Add error handling to debug audio issues
     audio.addEventListener("error", (e) => {
       console.error("Audio loading error:", e);
       console.error("Audio file path:", audio.src);
+      console.error("Audio readyState:", audio.readyState);
+    });
+    // Add loaded event to ensure audio is ready
+    audio.addEventListener("loadeddata", () => {
+      audioInitializedRef.current = true;
+      console.log("Audio loaded and ready");
+    });
+    // Add canplay event for better mobile support
+    audio.addEventListener("canplay", () => {
+      audioInitializedRef.current = true;
     });
     backgroundAudioRef.current = audio;
     return () => {
       audio.pause();
+      audio.src = ""; // Clear source to free memory
       backgroundAudioRef.current = null;
+      audioInitializedRef.current = false;
     };
+  }, []);
+
+  const tryPlayAudio = useCallback((audio: HTMLAudioElement) => {
+    audio.volume = MUSIC_VOLUME;
+    audio.currentTime = 0;
+    
+    // Play audio - critical for mobile: must be called directly from user interaction
+    const playPromise = audio.play();
+    
+    if (playPromise !== undefined) {
+      playPromise
+        .then(() => {
+          console.log("Audio playing successfully");
+          // Ensure volume is set after play starts (some mobile browsers reset it)
+          audio.volume = MUSIC_VOLUME;
+        })
+        .catch((error) => {
+          console.error("Audio play error:", error);
+          console.error("Audio readyState:", audio.readyState);
+          console.error("This might be due to browser autoplay policies. User interaction is required.");
+          
+          // Try to unlock audio context on mobile by playing muted first
+          if (audio.paused) {
+            const originalVolume = audio.volume;
+            audio.muted = true;
+            audio.volume = 0;
+            
+            audio.play()
+              .then(() => {
+                // Successfully unlocked, now play with sound
+                audio.muted = false;
+                audio.volume = MUSIC_VOLUME;
+                audio.currentTime = 0;
+                return audio.play();
+              })
+              .then(() => {
+                console.log("Audio unlocked and playing");
+              })
+              .catch((err) => {
+                console.error("Unlock attempt failed:", err);
+                audio.muted = false;
+                audio.volume = originalVolume;
+              });
+          }
+        });
+    }
   }, []);
 
   const playBackgroundMusic = useCallback(() => {
@@ -418,14 +484,21 @@ export default function App() {
     if (!audio.paused) {
       return;
     }
-    audio.volume = MUSIC_VOLUME; // Ensure volume is set before playing
-    audio.currentTime = 0;
-    void audio.play().catch((error) => {
-      // Log the error to help debug
-      console.error("Audio play error:", error);
-      console.error("This might be due to browser autoplay policies. User interaction is required.");
-    });
-  }, []);
+    
+    // For mobile: ensure audio is loaded and ready
+    // readyState: 0=HAVE_NOTHING, 1=HAVE_METADATA, 2=HAVE_CURRENT_DATA, 3=HAVE_FUTURE_DATA, 4=HAVE_ENOUGH_DATA
+    if (audio.readyState < 2) {
+      // Try to load the audio
+      audio.load();
+      // Wait a bit for mobile browsers to load
+      setTimeout(() => {
+        tryPlayAudio(audio);
+      }, 100);
+      return;
+    }
+    
+    tryPlayAudio(audio);
+  }, [tryPlayAudio]);
 
   const handlePrimaryAction = useCallback(() => {
     if (!hasStarted) {
@@ -550,6 +623,18 @@ export default function App() {
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [handlePrimaryAction]);
+
+  // Add touchstart handler specifically for mobile devices
+  useEffect(() => {
+    const handleTouchStart = () => {
+      // Only handle if it's the first touch (not already started)
+      if (!hasStarted) {
+        handlePrimaryAction();
+      }
+    };
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
+    return () => window.removeEventListener("touchstart", handleTouchStart);
+  }, [handlePrimaryAction, hasStarted]);
 
   const handleCardToggle = useCallback((id: string) => {
     setActiveCardId((current) => (current === id ? null : id));
