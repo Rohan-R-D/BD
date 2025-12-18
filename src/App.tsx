@@ -98,7 +98,9 @@ const TYPED_LINES = [
 const TYPED_CHAR_DELAY = 100;
 const POST_TYPING_SCENE_DELAY = 1000;
 const CURSOR_BLINK_INTERVAL = 480;
-const MUSIC_VOLUME = 0.5; // Volume level: 0.0 (silent) to 1.0 (maximum)
+const FADE_TARGET_VOLUME = 0.6;
+const FADE_STEP = 0.02;
+const FADE_INTERVAL_MS = 100;
 
 type BirthdayCardConfig = {
   id: string;
@@ -389,179 +391,56 @@ export default function App() {
   const [isCandleLit, setIsCandleLit] = useState(true);
   const [fireworksActive, setFireworksActive] = useState(false);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [showTapOverlay, setShowTapOverlay] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const backgroundAudioRef = useRef<HTMLAudioElement | null>(null);
   const typedTextRef = useRef<HTMLDivElement | null>(null);
-  const audioInitializedRef = useRef(false);
-  const audioPlayAttemptedRef = useRef(false);
-  const audioUnlockedRef = useRef(false);
+  const fadeIntervalRef = useRef<number | null>(null);
 
-  // Create audio element function - called on mount
-  useEffect(() => {
-    // Initialize audio element with mobile-friendly attributes
-    const audio = new Audio("/nouolve_bianche.mp3");
-    audio.loop = true;
-    audio.preload = "auto";
-    audio.volume = MUSIC_VOLUME;
-    // Critical for iOS: allows audio to play inline without fullscreen
-    audio.setAttribute("playsinline", "true");
-    audio.setAttribute("webkit-playsinline", "true");
-    audio.setAttribute("x-webkit-airplay", "allow");
-    // Cross-origin and other mobile-friendly attributes
-    audio.crossOrigin = "anonymous";
-    // Add error handling to debug audio issues
-    audio.addEventListener("error", (e) => {
-      console.error("Audio loading error:", e);
-      console.error("Audio file path:", audio.src);
-      console.error("Audio readyState:", audio.readyState);
-    });
-    // Add loaded event to ensure audio is ready
-    audio.addEventListener("loadeddata", () => {
-      audioInitializedRef.current = true;
-      console.log("Audio loaded and ready");
-    });
-    // Add canplay event for better mobile support
-    audio.addEventListener("canplay", () => {
-      audioInitializedRef.current = true;
-    });
-    backgroundAudioRef.current = audio;
-    return () => {
-      audio.pause();
-      audio.src = ""; // Clear source to free memory
-      backgroundAudioRef.current = null;
-      audioInitializedRef.current = false;
-      audioPlayAttemptedRef.current = false;
-    };
+  const clearFadeInterval = useCallback(() => {
+    if (fadeIntervalRef.current !== null) {
+      window.clearInterval(fadeIntervalRef.current);
+      fadeIntervalRef.current = null;
+    }
   }, []);
 
-  // Unlock audio context on first user interaction (mobile browsers requirement)
-  const unlockAudio = useCallback(() => {
-    if (audioUnlockedRef.current) {
-      return; // Already unlocked
-    }
+  const fadeInAudio = useCallback(
+    (audio: HTMLAudioElement) => {
+      clearFadeInterval();
+      audio.volume = 0;
+      fadeIntervalRef.current = window.setInterval(() => {
+        const nextVolume = Math.min(audio.volume + FADE_STEP, FADE_TARGET_VOLUME);
+        audio.volume = nextVolume;
+        if (nextVolume >= FADE_TARGET_VOLUME) {
+          clearFadeInterval();
+        }
+      }, FADE_INTERVAL_MS);
+    },
+    [clearFadeInterval]
+  );
 
+  const handleStartExperience = useCallback(() => {
     const audio = backgroundAudioRef.current;
-    if (!audio) {
-      return;
+    if (audio) {
+      audio.muted = false;
+      audio.volume = 0;
+      const playResult = audio.play();
+      if (playResult && typeof playResult.catch === "function") {
+        playResult.catch((err) => console.error("Audio play blocked:", err));
+      }
+      fadeInAudio(audio);
     }
-
-    // Try to unlock by playing a very short silent sound
-    const wasMuted = audio.muted;
-    const wasVolume = audio.volume;
-    audio.muted = true;
-    audio.volume = 0;
-    
-    audio.play()
-      .then(() => {
-        audio.pause();
-        audio.currentTime = 0;
-        audio.muted = wasMuted;
-        audio.volume = wasVolume;
-        audioUnlockedRef.current = true;
-        console.log("Audio context unlocked");
-      })
-      .catch(() => {
-        // Silent fail - unlock will be attempted on actual play
-        audio.muted = wasMuted;
-        audio.volume = wasVolume;
-      });
-  }, []);
-
-  // Direct audio play function - must be called synchronously from user interaction
-  // This is critical for mobile browsers, especially iOS
-  const playAudioDirectly = useCallback(() => {
-    // First, try to unlock audio context if not already unlocked
-    if (!audioUnlockedRef.current) {
-      unlockAudio();
-    }
-
-    if (audioPlayAttemptedRef.current) {
-      return; // Already attempted
-    }
-
-    let audio = backgroundAudioRef.current;
-    
-    // If audio doesn't exist or isn't ready, create a new one for mobile
-    // Some mobile browsers need a fresh audio instance per user interaction
-    if (!audio || audio.readyState === 0) {
-      console.log("Creating new audio instance for mobile");
-      audio = new Audio("/nouolve_bianche.mp3");
-      audio.loop = true;
-      audio.volume = MUSIC_VOLUME;
-      audio.setAttribute("playsinline", "true");
-      audio.setAttribute("webkit-playsinline", "true");
-      audio.crossOrigin = "anonymous";
-      backgroundAudioRef.current = audio;
-    }
-
-    if (!audio) {
-      console.warn("Failed to create audio");
-      return;
-    }
-
-    audioPlayAttemptedRef.current = true;
-    audio.volume = MUSIC_VOLUME;
-    audio.currentTime = 0;
-    
-    // Try to play immediately - this must happen synchronously in the event handler
-    const playPromise = audio.play();
-    
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          console.log("Audio playing successfully");
-          audio.volume = MUSIC_VOLUME;
-          audioUnlockedRef.current = true;
-        })
-        .catch((error) => {
-          console.error("Audio play error:", error);
-          console.error("Audio readyState:", audio.readyState);
-          
-          // For mobile: try unlocking with muted play first
-          if (audio.paused) {
-            const wasMuted = audio.muted;
-            audio.muted = true;
-            audio.volume = 0;
-            
-            audio.play()
-              .then(() => {
-                // Unlocked! Now play with sound
-                audio.muted = false;
-                audio.volume = MUSIC_VOLUME;
-                audio.currentTime = 0;
-                return audio.play();
-              })
-              .then(() => {
-                console.log("Audio unlocked and playing");
-                audioUnlockedRef.current = true;
-              })
-              .catch((err) => {
-                console.error("Unlock attempt failed:", err);
-                audio.muted = wasMuted;
-                audio.volume = MUSIC_VOLUME;
-                // Reset the flag so user can try again
-                audioPlayAttemptedRef.current = false;
-              });
-          } else {
-            audioPlayAttemptedRef.current = false;
-          }
-        });
-    }
-  }, [unlockAudio]);
+    setHasStarted(true);
+    setShowTapOverlay(false);
+  }, [fadeInAudio]);
 
 
   const handlePrimaryAction = useCallback(() => {
-    if (!hasStarted) {
-      // CRITICAL FOR MOBILE: Play audio immediately, before any state updates
-      // This must happen synchronously in the event handler
-      playAudioDirectly();
-      setHasStarted(true);
-      return;
-    }
     if (hasAnimationCompleted && isCandleLit) {
       setIsCandleLit(false);
       setFireworksActive(true);
     }
-  }, [hasStarted, hasAnimationCompleted, isCandleLit, playAudioDirectly]);
+  }, [hasAnimationCompleted, isCandleLit]);
 
   const typingComplete = currentLineIndex >= TYPED_LINES.length;
   const typedLines = useMemo(() => {
@@ -608,9 +487,6 @@ export default function App() {
       setIsCandleLit(true);
       setFireworksActive(false);
       setHasAnimationCompleted(false);
-      // Reset audio attempt flag so user can retry
-      audioPlayAttemptedRef.current = false;
-      audioUnlockedRef.current = false;
       return;
     }
 
@@ -652,28 +528,30 @@ export default function App() {
     sceneStarted,
   ]);
 
-  // Unlock audio on first user interaction (mobile requirement)
   useEffect(() => {
-    const unlockOnInteraction = () => {
-      if (!audioUnlockedRef.current) {
-        unlockAudio();
-      }
-      // Remove listeners after first unlock
-      window.removeEventListener("touchstart", unlockOnInteraction);
-      window.removeEventListener("click", unlockOnInteraction);
-      window.removeEventListener("pointerdown", unlockOnInteraction);
-    };
+    const audio = backgroundAudioRef.current;
+    if (!audio) {
+      return;
+    }
+    audio.muted = isMuted;
+  }, [isMuted]);
 
-    window.addEventListener("touchstart", unlockOnInteraction, { passive: true, once: true });
-    window.addEventListener("click", unlockOnInteraction, { once: true });
-    window.addEventListener("pointerdown", unlockOnInteraction, { once: true });
-
+  useEffect(() => {
     return () => {
-      window.removeEventListener("touchstart", unlockOnInteraction);
-      window.removeEventListener("click", unlockOnInteraction);
-      window.removeEventListener("pointerdown", unlockOnInteraction);
+      clearFadeInterval();
+      const audio = backgroundAudioRef.current;
+      if (audio) {
+        audio.pause();
+      }
     };
-  }, [unlockAudio]);
+  }, [clearFadeInterval]);
+
+  useEffect(() => {
+    const audio = backgroundAudioRef.current;
+    if (audio) {
+      audio.volume = 0;
+    }
+  }, []);
 
   useEffect(() => {
     const handle = window.setInterval(() => {
@@ -693,47 +571,38 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handlePrimaryAction]);
 
-  useEffect(() => {
-    const handlePointerDown = () => {
-      // For mobile: play audio immediately on pointer down
-      if (!hasStarted) {
-        playAudioDirectly();
-      }
-      handlePrimaryAction();
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [handlePrimaryAction, hasStarted, playAudioDirectly]);
-
-  // Add touchstart handler specifically for mobile devices
-  useEffect(() => {
-    const handleTouchStart = () => {
-      // Only handle if it's the first touch (not already started)
-      if (!hasStarted) {
-        // Play audio immediately on touch
-        playAudioDirectly();
-        handlePrimaryAction();
-      }
-    };
-    window.addEventListener("touchstart", handleTouchStart, { passive: true });
-    return () => window.removeEventListener("touchstart", handleTouchStart);
-  }, [handlePrimaryAction, hasStarted, playAudioDirectly]);
-
   const handleCardToggle = useCallback((id: string) => {
     setActiveCardId((current) => (current === id ? null : id));
   }, []);
 
   const isScenePlaying = hasStarted && sceneStarted;
-  const showActionButton =
-    !hasStarted || (hasAnimationCompleted && isCandleLit);
-  const actionButtonLabel = !hasStarted
-    ? "Start"
-    : hasAnimationCompleted && isCandleLit
-    ? "Blow out candle"
-    : "Tap / press";
+  const showActionButton = hasAnimationCompleted && isCandleLit;
+  const actionButtonLabel = "Blow out candle";
 
   return (
     <div className="App">
+      <audio
+        ref={backgroundAudioRef}
+        src="/nouolve_bianche.mp3"
+        preload="auto"
+        loop
+        playsInline
+        style={{ display: "none" }}
+      />
+      {showTapOverlay && (
+        <div
+          className="tap-overlay"
+          onClick={handleStartExperience}
+          onTouchStart={(event) => {
+            event.preventDefault();
+            handleStartExperience();
+          }}
+          role="button"
+          tabIndex={0}
+        >
+          <div className="tap-overlay__label">Tap to begin ✨</div>
+        </div>
+      )}
       <div
         className="background-overlay"
         style={{ opacity: backgroundOpacity }}
@@ -760,26 +629,20 @@ export default function App() {
       {hasAnimationCompleted && isCandleLit && (
         <div className="hint-overlay">tap/click/press to blow out the candle</div>
       )}
-      {showActionButton && (
-        <div className="action-button-container">
+      {hasStarted && !showTapOverlay && (
+        <div className="mute-toggle">
           <button
             type="button"
-            className="action-button"
-            onClick={() => {
-              // CRITICAL FOR MOBILE: Play audio immediately in the event handler
-              // before any React state updates or callbacks
-              if (!hasStarted) {
-                playAudioDirectly();
-              }
-              handlePrimaryAction();
-            }}
-            onTouchStart={() => {
-              // For mobile touch: play audio immediately
-              if (!hasStarted) {
-                playAudioDirectly();
-              }
-            }}
+            className="mute-button"
+            onClick={() => setIsMuted((prev) => !prev)}
           >
+            {isMuted ? "Unmute music" : "Mute music"}
+          </button>
+        </div>
+      )}
+      {showActionButton && (
+        <div className="action-button-container">
+          <button type="button" className="action-button" onClick={handlePrimaryAction}>
             {actionButtonLabel}
           </button>
         </div>
