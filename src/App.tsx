@@ -77,27 +77,28 @@ const BACKGROUND_FADE_START = Math.max(
 );
 
 const TYPED_LINES = [
-  "> tina",
+  "> manasvi/crush.exe",
   "...",
-  "> running program: birthday.exe",
+  "> running program: birthday special",
   "...",
-  "> input: your smile",
-  "> processing: happiness",
+  "> input: your smile + your eyes",
+  "> processing: happiness and special memories",
   "...",
   "> result:",
-  "> the world feels lighter today",
-  "> because it’s your birthday ✨",
+  "> the world feels brighter and happier today",
+  "> because you exist in it✨",
   "...",
   "> message:",
-  "> Happy Birthday, Tina 💜",
-  "> stay amazing, always",
+  "> Happy Birthday, Manasvi ❤️",
+  "> I hope you have a great day as your warm heart ",
   "...",
-  "٩(◕‿◕)۶ ٩(◕‿◕)۶ ٩(◕‿◕)۶",
+  "(*^.^*) (✿◠‿◠) (〃￣ω￣〃)",
 ];
 
 const TYPED_CHAR_DELAY = 100;
 const POST_TYPING_SCENE_DELAY = 1000;
 const CURSOR_BLINK_INTERVAL = 480;
+const MUSIC_VOLUME = 0.5; // Volume level: 0.0 (silent) to 1.0 (maximum)
 
 type BirthdayCardConfig = {
   id: string;
@@ -392,9 +393,15 @@ export default function App() {
   const typedTextRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const audio = new Audio("/music.mp3");
+    const audio = new Audio("/nouolve_bianche.mp3");
     audio.loop = true;
     audio.preload = "auto";
+    audio.volume = MUSIC_VOLUME; // Set volume level
+    // Add error handling to debug audio issues
+    audio.addEventListener("error", (e) => {
+      console.error("Audio loading error:", e);
+      console.error("Audio file path:", audio.src);
+    });
     backgroundAudioRef.current = audio;
     return () => {
       audio.pause();
@@ -405,14 +412,18 @@ export default function App() {
   const playBackgroundMusic = useCallback(() => {
     const audio = backgroundAudioRef.current;
     if (!audio) {
+      console.warn("Audio not initialized");
       return;
     }
     if (!audio.paused) {
       return;
     }
+    audio.volume = MUSIC_VOLUME; // Ensure volume is set before playing
     audio.currentTime = 0;
-    void audio.play().catch(() => {
-      // ignore play errors (browser might block)
+    void audio.play().catch((error) => {
+      // Log the error to help debug
+      console.error("Audio play error:", error);
+      console.error("This might be due to browser autoplay policies. User interaction is required.");
     });
   }, []);
 
